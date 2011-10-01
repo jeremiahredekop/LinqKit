@@ -8,14 +8,14 @@ using System.Reflection;
 
 namespace LinqKit
 {
-	/// <summary>
-	/// Custom expresssion visitor for ExpandableQuery. This expands calls to Expression.Compile() and
-	/// collapses captured lambda references in subqueries which LINQ to SQL can't otherwise handle.
-	/// </summary>
-	class ExpressionExpander : ExpressionVisitor
-	{
-		// Replacement parameters - for when invoking a lambda expression.
-		Dictionary<ParameterExpression, Expression> _replaceVars = null;
+    /// <summary>
+    /// Custom expresssion visitor for ExpandableQuery. This expands calls to Expression.Compile() and
+    /// collapses captured lambda references in subqueries which LINQ to SQL can't otherwise handle.
+    /// </summary>
+    partial class ExpressionExpander : ExpressionVisitor
+    {
+        // Replacement parameters - for when invoking a lambda expression.
+        Dictionary<ParameterExpression, Expression> _replaceVars = null;
 
 		internal ExpressionExpander () { }
 
@@ -63,15 +63,33 @@ namespace LinqKit
 			return new ExpressionExpander (replaceVars).Visit (lambda.Body);
 		}
 
-		protected override Expression VisitMethodCall (MethodCallExpression m)
-		{
-			if (m.Method.Name == "Invoke" && m.Method.DeclaringType == typeof (Extensions))
-			{
-				Expression target = m.Arguments[0];
-				if (target is MemberExpression) target = TransformExpr ((MemberExpression)target);
-				if (target is ConstantExpression) target = ((ConstantExpression) target).Value as Expression;
 
-				LambdaExpression lambda = (LambdaExpression)target;
+        private Expression MyVisitRecursive(Expression target)
+        {
+            if (target is MemberExpression) return MyVisitRecursive(TransformExpr((MemberExpression)target));
+
+            // Added by Ryan D. Hatch, GeniusCode on 2010.01.19 - Allows support for Methods that return Expressions
+            if (target is MethodCallExpression) return MyVisitRecursive(TransformExpr((MethodCallExpression)target));
+
+            // Added by Ryan D. Hatch, GeniusCode on 2011.07.08 - Allows support for Funcs that return Expressions
+            if (target is InvocationExpression) return MyVisitRecursive(((InvocationExpression)target).Expression);
+
+            if (target is ConstantExpression) return MyVisitRecursive(((ConstantExpression)target).Value as Expression);
+
+            if (target is LambdaExpression) return target;
+            
+
+            throw new NotSupportedException();
+        }
+
+        protected override Expression VisitMethodCall(MethodCallExpression m)
+        {
+            if (m.Method.Name == "Invoke" && m.Method.DeclaringType == typeof(Extensions))
+            {
+                Expression target = m.Arguments[0];
+
+                //LambdaExpression lambda = (LambdaExpression)target;
+                LambdaExpression lambda = (LambdaExpression)MyVisitRecursive(target);
 
 				Dictionary<ParameterExpression, Expression> replaceVars;
 				if (_replaceVars == null)
@@ -100,9 +118,9 @@ namespace LinqKit
 				if (newExpr != me) return newExpr;
 			}
 
-			// Strip out any nested calls to AsExpandable():
-			if (m.Method.Name == "AsExpandable" && m.Method.DeclaringType == typeof (Extensions))
-				return m.Arguments[0];
+            // Strip out any nested calls to AsExpandable():
+            if (m.Method.Name == "AsExpandable" && m.Method.DeclaringType == typeof(Extensions))
+                return m.Arguments[0];
 
 			return base.VisitMethodCall (m);
 		}
@@ -116,26 +134,14 @@ namespace LinqKit
 			return base.VisitMemberAccess (m);
 		}
 
-		Expression TransformExpr (MemberExpression input)
-		{
-			// Collapse captured outer variables
-			if (input == null
-				|| !(input.Member is FieldInfo)
-				|| !input.Member.ReflectedType.IsNestedPrivate
-				|| !input.Member.ReflectedType.Name.StartsWith ("<>"))	// captured outer variable
-				return input;
+        public Expression Visit(Expression exp)
+        {
+            return base.Visit(exp);
+        }
 
-			if (input.Expression is ConstantExpression)
-			{
-				object obj = ((ConstantExpression)input.Expression).Value;
-				if (obj == null) return input;
-				Type t = obj.GetType ();
-				if (!t.IsNestedPrivate || !t.Name.StartsWith ("<>")) return input;
-				FieldInfo fi = (FieldInfo)input.Member;
-				object result = fi.GetValue (obj);
-				if (result is Expression) return Visit ((Expression)result);
-			}
-			return input;
-		}
-	}
+        //TODO: Maybe override other member calls
+
+
+
+    }
 }
